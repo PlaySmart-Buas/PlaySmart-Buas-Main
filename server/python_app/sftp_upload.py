@@ -1,11 +1,17 @@
 import paramiko
 import os
 
-# Configuration for the SFTP server (default values, can be overridden dynamically)
-DEFAULT_SFTP_HOST = "10.4.28.2"
-DEFAULT_SFTP_PORT = 2422
-DEFAULT_SFTP_USERNAME = "localhost"
-DEFAULT_SFTP_PASSWORD = "yourpassword"
+# Configuration for the SFTP server.
+#
+# Modified 2026-09 (iteration 5): the password used to be a literal here, in a
+# public repository, fronting students' biometric data. Host, port, user and
+# password now come from the environment — put them in the repo's .env (loaded by
+# src/session.py, see .env.example) or export them in the shell. The defaults
+# below are the non-secret parts only.
+DEFAULT_SFTP_HOST = os.environ.get("PLAYSMART_SFTP_HOST", "10.4.28.2")
+DEFAULT_SFTP_PORT = int(os.environ.get("PLAYSMART_SFTP_PORT", "2422"))
+DEFAULT_SFTP_USERNAME = os.environ.get("PLAYSMART_SFTP_USER", "localhost")
+DEFAULT_SFTP_PASSWORD = os.environ.get("PLAYSMART_SFTP_PASSWORD", "")
 
 def upload_file_to_sftp(local_file_path, dest_directory,
                         sftp_host=DEFAULT_SFTP_HOST,
@@ -25,6 +31,10 @@ def upload_file_to_sftp(local_file_path, dest_directory,
         sftp_username (str): Username for SFTP server.
         sftp_password (str): Password for SFTP server.
     """
+    if not sftp_password:
+        print("PLAYSMART_SFTP_PASSWORD is not set - nothing uploaded, file kept locally: "
+              f"{local_file_path}")
+        return
     try:
         # Initialize SFTP client
         transport = paramiko.Transport((sftp_host, sftp_port))
