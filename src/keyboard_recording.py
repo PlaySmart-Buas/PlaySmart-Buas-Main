@@ -1,19 +1,27 @@
+"""Input recorder: keyboard and mouse events to data/input/<session_id>_input.csv.
+
+Modified 2026-09 (iteration 5): file named from the shared session id (session.py);
+stops on the orchestrator's stop signal instead of only F12.
+"""
+
 from pynput import mouse, keyboard
 import time
 import csv
-from datetime import datetime
-import os
+import sys
+import threading
+from pathlib import Path
 import screeninfo
 import math
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import session
 
 screen = screeninfo.get_monitors()[0]
 screen_resolution = f"{screen.width}x{screen.height}p"
 
-# Generate a single timestamped filename for the session
-session_timestamp = datetime.now().strftime('%d-%m-%Y_%H-%M-%S')
-data_folder = 'data/input/'
-os.makedirs(data_folder, exist_ok=True)
-file_path = os.path.join(data_folder, f'input_log_{session_timestamp}.csv')
+# Named with the session id at creation, so this file never has to be paired
+# with the other streams by guessing which one is newest.
+file_path = str(session.stream_path("input"))
 
 movement_threshold = 100
 last_logged_position = None
@@ -65,17 +73,37 @@ def on_move(x, y):
             last_logged_position = (x, y)
             log_and_print('mouse_move', x, y)
 
-print("Keyboard & Mouse logging started. Press F12 to stop.")
+print(f"Keyboard & Mouse logging started -> {file_path}")
+print("Stops when the game ends, or on F12.")
 
 # create the listeners so both can be stopped
 mouse_listener = mouse.Listener(on_click=on_click, on_move=on_move)
 keyboard_listener = keyboard.Listener(on_press=on_press, on_release=on_release)
 
+
+def watch_for_stop():
+    """Stop when the orchestrator says the game is over.
+
+    F12 is still handled in on_release for a manual abort, but with automatic
+    start/stop there is no key press to wait for, so the stop flag has to be
+    polled as well.
+    """
+    while keyboard_listener.running:
+        if session.stop_requested():
+            print("Stop requested, ending input capture.")
+            mouse_listener.stop()
+            keyboard_listener.stop()
+            return
+        time.sleep(0.25)
+
+
 # start both
 mouse_listener.start()
 keyboard_listener.start()
 
-# wait for keyboard to finish (when F12 pressed)
+threading.Thread(target=watch_for_stop, daemon=True).start()
+
+# wait for the keyboard listener to finish (stop flag or F12)
 keyboard_listener.join()
 
 print(f"Saving data to {file_path}")
