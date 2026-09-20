@@ -2,6 +2,20 @@
 PlaySmart is a modular toolkit designed for data professionals to analyze game design elements, performance metrics, and team dynamics. The toolkit consists of both hardware (eye-trackers, regular and heat cameras, physiological sensors) and software (Python packages, applications) to enable modular and repeatable game analysis.
 
 
+## Iteration 5 (2026–27): League of Legends capture rig
+
+The capture toolkit has been ported from Valorant to League of Legends by the BUas
+2026–27 student team. Start here:
+
+- **Set up a capture PC:** `Toolkit setup.md` — one script (`setup.ps1`), then Tobii and OBS.
+- **Prove it works:** `TESTING.md` — pre-flight check and the test sequence T1–T8.
+- **What changed and why:** `CHANGELOG.md` — every modified file with its reason.
+
+In short: one session id per game, automatic start/stop on the game itself, graceful
+saving (no more truncated files), League game state from the Live Client Data API, video
+driven over obs-websocket with a timing anchor, a pre-flight check, and secrets out of
+the code. Branch `feature/league-collection` until merged.
+
 # Contributing to PlaySmart
 
 Thank you for your interest in contributing to PlaySmart!
