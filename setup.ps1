@@ -55,7 +55,7 @@ function Winget-Install($id, $label) {
     Write-Host "   installing $label ..."
     winget install --id $id -e --accept-package-agreements --accept-source-agreements --silent | Out-Null
     if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne -1978335189) {   # -1978335189 = already installed / no upgrade
-        Warn "$label: winget exit $LASTEXITCODE - install it by hand and re-run"
+        Warn "${label}: winget exit $LASTEXITCODE - install it by hand and re-run"
     } else { Ok "$label installed" }
 }
 
