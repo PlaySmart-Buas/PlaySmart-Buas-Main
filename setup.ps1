@@ -69,7 +69,7 @@ if ($SkipInstalls) {
     Winget-Install "Git.Git"                          "Git"
     Winget-Install "Python.Python.3.10"               "Python 3.10"
     Winget-Install "OBSProject.OBSStudio"             "OBS Studio"
-    Winget-Install "Microsoft.VCRedist.2017.x64"      "VC++ 2017 x64 (OpenFace)"
+    Winget-Install "Microsoft.VCRedist.2015+.x64"     "VC++ 2015-2022 x64 (OpenFace)"
     Winget-Install "GitHub.cli"                       "GitHub CLI"
     if ($WithTranscription) { Winget-Install "Gyan.FFmpeg" "ffmpeg (Whisper)" }
     Refresh-Path
