@@ -86,6 +86,15 @@ remove those mechanisms rather than patch around them.
 - **Not yet verified:** `check_video_sync` (T5) on that session, EDA end to end, the emotion
   stream on the new setup.
 
+### Replay API spike (22 Sep 2026) — `tools/replay/`
+
+Riot's official Replay API renders a recorded game with fog of war off and the interface
+reduced to the minimap, at an exact frame rate. `minimap_match.py` reads champion
+positions off those frames (Data Dragon portrait templates, static-background exclusion,
+one champion per icon). On a 30 s / 61-frame test at 3440×1440: 9 of 10 champions
+placed correctly per frame, 44 game units per pixel. This replaces the planned
+minimap-CV-on-screen-recording route and the dead `.rofl` parser. See `tools/replay/README.md`.
+
 ### Not changed, on purpose
 
 - `auto_merge.py` / the server pipeline (separate repository): `AUTO_ALIGN_EMOTION` should
