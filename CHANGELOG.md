@@ -77,8 +77,14 @@ remove those mechanisms rather than patch around them.
   `t0` within 15 ms, right file claimed with a newer decoy present, all four failure
   paths degrade cleanly; `poetry lock` + `poetry install` of the main group on 3.10 in
   23 s + 5 s.
-- **Not yet verified on hardware:** `obs_recorder.py` against a real OBS (T3–T5 in
-  `TESTING.md`), EDA end to end, `setup.ps1` on a clean Windows install.
+- **21 Sep 2026, HIVE pc03, set up from a bare Windows install with `setup.ps1`:** first
+  full-stack capture — session `20260921-153638-ae18ce`, a real CLASSIC game on Summoner's
+  Rift (~18 min). Gaze 64,022 samples at 60 Hz, 100 % valid (Tobii Pro Spark); audio 104.7 MB;
+  input, game state, events and meta; **video 57.5 MB started, stopped and filed by
+  `obs_recorder` on the session id**. Upload correctly withheld with no SFTP password.
+  Emotion wrote nothing despite OpenFace being present (undiagnosed); EDA absent (no ring).
+- **Not yet verified:** `check_video_sync` (T5) on that session, EDA end to end, the emotion
+  stream on the new setup.
 
 ### Not changed, on purpose
 
