@@ -2,6 +2,12 @@
 
 Added 2026-09-22 (iteration 5). Prototype from the replay spike; see `CHANGELOG.md`.
 
+**Superseded 2026-09-23** by the post-game pipeline in the team repository
+(`playsmart postgame`, `docs/postgame-pipeline.md` there). It downloads, renders
+(fog off and on), tracks with temporal clean-up and merges every stream per game.
+This folder stays as the record of the spike. What the rig itself now contributes is
+the game id in `<sid>_meta.json` (`src/lcu.py`) and the audio anchor.
+
 League's local game state (`liveclient_recorder.py`) has no positions. Riot's official
 **Replay API** (`EnableReplayApi=1` under `[General]` in `Config\game.cfg`, then
 `https://127.0.0.1:2999/replay/*` while a replay plays) renders any game we recorded with
