@@ -4,13 +4,17 @@ Modified 2026-09 (iteration 5): file named from the shared session id; stops on 
 orchestrator's stop signal so the SoundFile context closes and the WAV header is
 finalised (being terminated left 44-byte files); Whisper transcription is off unless
 PLAYSMART_TRANSCRIBE=1 and needs `poetry install --with transcription`.
+Modified 2026-09-23: writes <sid>_audio.json with the wall-clock time of the first
+sample, so the audio can be placed on the game clock.
 """
 
 import sounddevice as sd
 import soundfile as sf
 import datetime
+import json
 import os
 import sys
+import time
 from pathlib import Path
 from pynput import keyboard
 
@@ -49,13 +53,46 @@ listener.start()
 # ------------------ RECORD AUDIO ------------------
 # Leaving this `with` block is what finalises the WAV header, so the loop must
 # be allowed to exit normally rather than the process being killed.
+#
+# Timing anchor: a WAV has no timestamps, so without one the audio cannot be placed on
+# the game clock. The first sample of the first block was captured one block plus the
+# input latency before that read returned; that instant goes to <sid>_audio.json as
+# t0_unix_ms (the same convention as obs_recorder's <sid>_video.json). frames_written
+# and t_end_unix_ms let the merge check for drift; overflows counts blocks where the
+# device dropped samples, which would shift everything after them.
+BLOCK = 1024
+t0_ms = None
+frames_written = 0
+overflows = 0
 with sf.SoundFile(filepath, mode='w', samplerate=samplerate, channels=channels) as file:
     with sd.InputStream(samplerate=samplerate, channels=channels) as stream:
         while recording and not session.stop_requested():
-            data, _ = stream.read(1024)
+            data, overflowed = stream.read(BLOCK)
+            if t0_ms is None:
+                latency = stream.latency if isinstance(stream.latency, float) else 0.0
+                t0_ms = time.time() * 1000 - (BLOCK / samplerate + latency) * 1000
+            overflows += int(bool(overflowed))
             file.write(data)
+            frames_written += len(data)
+
+t_end_ms = time.time() * 1000
+anchor = session.stream_path("audio", ext="json")
+anchor.write_text(json.dumps({
+    "session_id": session.session_id(),
+    "file": Path(filepath).name,
+    "t0_unix_ms": round(t0_ms, 1) if t0_ms is not None else None,
+    "t_end_unix_ms": round(t_end_ms, 1),
+    "samplerate": samplerate,
+    "frames_written": frames_written,
+    "overflows": overflows,
+    "method": "first block read time minus block length and input latency",
+}, indent=2), encoding="utf-8")
 
 print(f"Recording stopped, saved {filepath}")
+if t0_ms is not None:
+    drift_ms = (t_end_ms - t0_ms) - frames_written / samplerate * 1000
+    print(f"audio timing: frame zero at {t0_ms:.0f}, {overflows} overflow(s), "
+          f"wall vs samples differ by {drift_ms:.0f} ms at the end")
 
 # ------------------ TRANSCRIPTION ------------------
 if not TRANSCRIBE:

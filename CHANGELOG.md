@@ -95,6 +95,20 @@ one champion per icon). On a 30 s / 61-frame test at 3440×1440: 9 of 10 champio
 placed correctly per frame, 44 game units per pixel. This replaces the planned
 minimap-CV-on-screen-recording route and the dead `.rofl` parser. See `tools/replay/README.md`.
 
+### Game identity and audio timing (23 Sep 2026)
+
+| file | change | reason |
+|---|---|---|
+| `src/lcu.py` **new** | Reads the League client's lockfile and asks its local API (read-only, best-effort) for the game id, platform, queue, PUUID and client patch. `python src/lcu.py` prints them. | The Live Client Data API has no game id, so nothing linked a session to its replay, its Match-V5 record, or the other four players' sessions of the same game. |
+| `src/liveclient_recorder.py` | `<sid>_meta.json` gains `game_id`, `platform_id`, `queue_id`, `puuid`, `client_game_version`, `identity_source`, filled in a background thread so the recording never waits on the client. | `<platform>-<game_id>.rofl` is the replay's file name; the patch decides whether it can still be rendered. |
+| `src/microphone_recording.py` | Writes `<sid>_audio.json`: wall-clock time of the first sample (`t0_unix_ms`), frames written, end time, and the number of input overflows. | A WAV has no timestamps; without an anchor the audio could not be placed on the game clock. Overflows would shift everything after them, so they are counted. |
+| `src/check_session.py` | Reports whether the session has a game id (or is Practice Tool, which has no replay) and whether the audio is anchored. | |
+
+Rendering the replay, reading positions and merging all streams per game run after the
+session, in the team repository's `playsmart` package (`playsmart postgame`). The
+prototype in `tools/replay/` stays for reference; the package version adds temporal
+gating and the fog-on pass.
+
 ### Not changed, on purpose
 
 - `auto_merge.py` / the server pipeline (separate repository): `AUTO_ALIGN_EMOTION` should

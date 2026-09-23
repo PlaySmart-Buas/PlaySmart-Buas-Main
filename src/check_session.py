@@ -155,6 +155,14 @@ def report(sid: str, data_dir: Path) -> bool:
         print(f"  player {meta.get('riot_id', '?')}  roster of {len(meta.get('roster', []))}")
         if meta.get("has_bots"):
             print(f"{WARN} bots in the lobby - this is not competitive gameplay")
+        if meta.get("game_id"):
+            print(f"{OK} game {meta.get('platform_id') or '?'}_{meta['game_id']} on client "
+                  f"{meta.get('client_game_version') or '?'} - the replay can be found by id")
+        elif meta.get("game_mode") == "PRACTICETOOL":
+            print(f"{WARN} Practice Tool - no replay exists, so no positions for this session")
+        else:
+            print(f"{WARN} no game id ({meta.get('identity_source', 'older recorder')}) - "
+                  "the post-game pipeline will match the replay by roster instead")
     else:
         print(f"{BAD} no {sid}_meta.json - the game client API was not reachable")
         good = False
@@ -191,6 +199,18 @@ def report(sid: str, data_dir: Path) -> bool:
                 good = False
         else:
             print(f"{WARN} events CSV is empty - no kills or objectives were recorded")
+
+    audio_anchor = data_dir / "audio" / f"{sid}_audio.json"
+    if (data_dir / "audio" / f"{sid}_audio.wav").exists():
+        if audio_anchor.exists():
+            anchor = json.loads(audio_anchor.read_text(encoding="utf-8"))
+            lost = anchor.get("overflows") or 0
+            flag = OK if anchor.get("t0_unix_ms") and not lost else WARN
+            print(f"\n{flag} audio anchored: frame zero at "
+                  f"{_local(anchor['t0_unix_ms']) if anchor.get('t0_unix_ms') else '?'}, "
+                  f"{lost} overflow(s)")
+        else:
+            print(f"\n{WARN} audio has no timing anchor (<sid>_audio.json) - older recorder")
 
     # --- player-side streams ----------------------------------------------
     for stream in ("gaze", "input", "emotion", "eda"):

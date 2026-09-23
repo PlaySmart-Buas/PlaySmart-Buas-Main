@@ -17,8 +17,10 @@ What this buys the pipeline:
 * **Labels for free.** Game mode, map and Riot ID come from the API instead of a
   free-text dropdown that produced nine spellings of two game names.
 
-Note it does *not* give champion positions — that is Match-V5 timeline data,
-fetched afterwards and only for matchmade games. The two reconcile on game time.
+Note it does *not* give champion positions or the game id. The id is read from the
+League client (``lcu.py``) into ``<sid>_meta.json`` so the post-game pipeline can find
+the replay; positions come from rendering that replay (team repository,
+``playsmart.replay``). Everything reconciles on game time.
 
 Standalone (useful for testing without any lab hardware — open Practice Tool)::
 
@@ -52,6 +54,7 @@ try:
 except ImportError:  # running from the repo root rather than src/
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import session as playsmart_session
+import lcu
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -250,6 +253,32 @@ def meta_dict(sid: str, data: dict, started_ms: int) -> dict:
     }
 
 
+def add_identity(meta: dict, meta_file: Path) -> None:
+    """Add the game id, platform, PUUID and client patch to the session's meta.
+
+    These link a capture session to its replay (``<platform>-<game_id>.rofl``), its
+    Match-V5 record, and the other players' sessions of the same game. Best-effort:
+    on any failure the fields stay empty and ``identity_source`` says why; the
+    post-game pipeline can still match the session to a replay by its roster.
+    """
+    try:
+        ident = lcu.game_identity()
+    except Exception as exc:  # never let this reach the recording thread
+        ident = {"identity_source": f"error: {exc}"}
+    meta.update(ident)
+    try:
+        meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"[liveclient] could not add game id to meta: {exc}", flush=True)
+        return
+    if meta.get("game_id"):
+        print(f"[liveclient] game {meta.get('platform_id') or '?'}_{meta['game_id']} "
+              f"on client {meta.get('client_game_version') or '?'}", flush=True)
+    else:
+        print(f"[liveclient] no game id ({meta.get('identity_source')}); the replay "
+              "will be matched by roster afterwards", flush=True)
+
+
 def wait_for_game(abort: "threading.Event | None" = None,
                   poll_seconds: float = 2.0) -> "dict | None":
     """Block until a game is running. None if `abort` is set first."""
@@ -283,7 +312,11 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     meta = meta_dict(sid, data, started)
-    (out_dir / f"{sid}_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    meta_file = out_dir / f"{sid}_meta.json"
+    meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # The game id comes from the League client, not this API; asking can take a few
+    # seconds when the client is slow, so it runs beside the recording, never before it.
+    threading.Thread(target=add_identity, args=(meta, meta_file), daemon=True).start()
     print(f"[liveclient] {meta['game_mode'] or 'game'} on {meta['map_name'] or '?'} "
           f"as {meta['champion'] or '?'} ({meta['riot_id'] or '?'})", flush=True)
 
