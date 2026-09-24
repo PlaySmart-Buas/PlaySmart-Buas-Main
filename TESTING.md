@@ -4,7 +4,7 @@ Added 2026-09 (iteration 5). How to set up a capture PC, and the test sequence t
 proves every stream is real before anyone plays a match that matters. Work through it
 in order; each test has a pass condition.
 
-Sections: 1 set up a PC · 2 pre-flight · 3 OBS · 4 tests T1–T8 · 5 results table ·
+Sections: 1 set up a PC · 2 pre-flight · 3 OBS · 4 tests T1–T10 · 5 results table ·
 6 things that look wrong but are not · 7 real blockers · 8 troubleshooting.
 
 Time budget: a new PC about 45 minutes (mostly downloads and the Tobii calibration); the
@@ -218,6 +218,32 @@ in `.env`, run a 2-minute game, note the gaze Hz from `check_session.py`, remove
 setting. Same rate (±5 %) as T4 clears the suspicion; a lower rate with the overlay
 running is a finding.
 
+### T9 — gaze validation and minimap rectangle (5 min, once per PC and per player)
+
+Added 25 Sep 2026. After the Tobii calibration, with League on the loading screen or
+in a Practice Tool game:
+
+    poetry run python src\gaze_validation.py
+
+Look at each of the five dots; then put the mouse on the minimap's top-left corner
+and press SPACE, then its bottom-right corner and SPACE.
+
+Pass: `data\gaze\validation_<stamp>.json` with `accuracy_px` under 60 (re-calibrate
+if not) and `accuracy_deg` present (it needs the display size from the tracker);
+`data\json\minimap_rect.json` with a rectangle in the bottom-right of the screen.
+`check_session.py` on the next session prints both.
+
+### T10 — post-game extras (part of T4)
+
+After a T4 game the upload step should print `Post-game stats: <sid>_eog.json`
+(the client fills the block a few seconds after the game; a game left from the menu
+may not produce one), show the self-label dialog (answer or Skip; it closes itself
+after 3 minutes), and print `Manifest : <sid>_manifest.json; index sessions.csv
+updated`. Pass: the three files exist under `data\gamestate\`, `data\sessions.csv`
+has one new line, and `<sid>_players.csv` has ten times the rows of
+`<sid>_gamestate.csv` (five players in a Practice Tool game with bots). No Riot ID
+anywhere in `_players.csv`, `_eog.json` or `_labels.json`.
+
 ## 5. Results table
 
 Paste it into the pull request when done.
@@ -232,6 +258,8 @@ Paste it into the pull request when done.
 | T6 F12 abort | | | |
 | T7 OBS closed | | | |
 | T8 overlay off | | | gaze Hz with vs without overlay |
+| T9 gaze validation | | | accuracy px / deg, minimap rect |
+| T10 post-game extras | | | eog, labels, manifest, players.csv rows |
 
 Also record: OBS version, encoder, recording format, tracker model and rate, OpenFace
 present yes/no, ring paired yes/no.

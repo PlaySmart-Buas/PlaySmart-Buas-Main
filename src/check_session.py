@@ -163,6 +163,43 @@ def report(sid: str, data_dir: Path) -> bool:
         else:
             print(f"{WARN} no game id ({meta.get('identity_source', 'older recorder')}) - "
                   "the post-game pipeline will match the replay by roster instead")
+        # 25 Sep 2026: the context the client added, and the per-PC measurements.
+        q = meta.get("queue_type") or meta.get("queue_game_mode") or ""
+        ranked = meta.get("ranked") or {}
+        solo = ranked.get("RANKED_SOLO_5x5") or {}
+        tier = f"{solo.get('tier', '')} {solo.get('division', '')}".strip()
+        extras = []
+        if q:
+            extras.append(f"queue {q}" + (" (custom)" if meta.get("is_custom") else ""))
+        if tier:
+            extras.append(f"solo tier {tier}")
+        if meta.get("skin_name"):
+            extras.append(f"skin {meta['skin_name']}")
+        if extras:
+            print("  " + ", ".join(extras))
+        gs = (meta.get("game_settings") or {}).get("General") or {}
+        hud = (meta.get("game_settings") or {}).get("HUD") or {}
+        if gs or hud:
+            print(f"      client settings: {gs.get('Width', '?')}x{gs.get('Height', '?')}, "
+                  f"minimap scale {hud.get('MinimapScale', '?')}, HUD scale {hud.get('GlobalScale', '?')}")
+        else:
+            print(f"{WARN} no client settings in the meta (League client not reachable at start?)")
+        if meta.get("minimap_rect_px"):
+            r = meta["minimap_rect_px"]
+            print(f"{OK} minimap rectangle measured: ({r.get('x0')},{r.get('y0')})-({r.get('x1')},{r.get('y1')})")
+        else:
+            print(f"{WARN} minimap rectangle not measured - run src/gaze_validation.py once on this PC")
+        gv = meta.get("gaze_validation") or {}
+        if gv.get("accuracy_px") is not None:
+            deg = f" ({gv['accuracy_deg']} deg)" if gv.get("accuracy_deg") is not None else ""
+            flag = OK if gv["accuracy_px"] <= 60 else WARN
+            print(f"{flag} gaze accuracy {gv['accuracy_px']} px{deg} on {gv.get('when', '?')}")
+        else:
+            print(f"{WARN} no gaze validation on record for this PC - run src/gaze_validation.py")
+        for name, label in (("eog", "post-game stats"), ("labels", "player's self-labels"),
+                            ("manifest", "file manifest")):
+            present = (data_dir / "gamestate" / f"{sid}_{name}.json").exists()
+            print(f"{OK if present else WARN} {label}: {'present' if present else 'missing'}")
     else:
         print(f"{BAD} no {sid}_meta.json - the game client API was not reachable")
         good = False

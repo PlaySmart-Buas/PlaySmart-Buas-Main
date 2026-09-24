@@ -1,6 +1,10 @@
 """Label and upload one capture session.
 
-Modified 2026-09 (iteration 5): rewritten - see below.
+Modified 2026-09 (iteration 5): rewritten - see below. Modified 2026-09-25: after the
+recorders stop it also fetches the client's post-game stats block (``<sid>_eog.json``),
+asks the player about their deaths (``self_labels.py`` -> ``<sid>_labels.json``), writes
+a SHA-256 manifest of the session's files (``<sid>_manifest.json``) and appends one
+line to ``data/sessions.csv``.
 
 This used to be the weakest link in the pipeline. It asked the operator for a
 player name and a game from a dropdown, then went looking for the newest
@@ -21,10 +25,13 @@ The free-text game dropdown is gone with it — that field produced nine spellin
 of two game names, including `valornat`, `valorant ` and `nogame`.
 """
 
+import csv
+import hashlib
 import json
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent
@@ -32,7 +39,13 @@ sys.path.insert(0, str(SRC))
 sys.path.append(str(SRC.parent))
 
 import session  # noqa: E402
+import lcu  # noqa: E402
+import self_labels  # noqa: E402
 from server.python_app.sftp_upload import upload_file_to_sftp  # noqa: E402
+
+# Seconds to wait for the client's post-game stats block after the game ends.
+EOG_WAIT_S = float(os.environ.get("PLAYSMART_EOG_WAIT_S", "45"))
+SESSIONS_INDEX = "sessions.csv"
 
 # Local stream -> remote SFTP directory.
 #
@@ -149,6 +162,101 @@ def claim_video(sid, started_ms):
     return dest
 
 
+# ------------------ end-of-game extras (25 Sep 2026) ------------------
+
+def save_eog(sid, meta):
+    """The client's post-game stats block, scrubbed of names, as <sid>_eog.json.
+
+    Works for Practice Tool and customs, which Match-V5 never records. The block
+    appears a few seconds after the game ends; waits up to EOG_WAIT_S for one that
+    carries this session's game id.
+    """
+    if EOG_WAIT_S <= 0:
+        return None
+    block = lcu.end_of_game_stats(str(meta.get("game_id", "")), wait_s=EOG_WAIT_S)
+    if not block:
+        print("No post-game stats block from the client (fine for a game left early).")
+        return None
+    path = session.stream_dir("gamestate") / f"{sid}_eog.json"
+    try:
+        path.write_text(json.dumps(block, indent=2), encoding="utf-8")
+    except OSError as exc:
+        print(f"Could not write {path.name}: {exc}")
+        return None
+    print(f"Post-game stats: {path.name}")
+    return path
+
+
+def sha256_of(path, chunk=1 << 20):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def write_manifest(sid, files, meta):
+    """<sid>_manifest.json: every file of the session with size and SHA-256.
+
+    This is what makes the dataset provable later: a copy on the server or on a
+    hand-over drive can be checked against it file by file.
+    """
+    entries = []
+    for stream, paths in sorted(files.items()):
+        for path in paths:
+            try:
+                entries.append({
+                    "stream": stream,
+                    "file": path.name,
+                    "bytes": path.stat().st_size,
+                    "sha256": sha256_of(path),
+                })
+            except OSError as exc:
+                entries.append({"stream": stream, "file": path.name, "error": str(exc)})
+    manifest = {
+        "session_id": sid,
+        "written_unix_ms": int(time.time() * 1000),
+        "game_key": (f"{meta.get('platform_id') or 'UNKNOWN'}_{meta['game_id']}"
+                     if meta.get("game_id") else ""),
+        "participant_id": meta.get("participant_id", ""),
+        "files": entries,
+    }
+    path = session.stream_dir("gamestate") / f"{sid}_manifest.json"
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return path
+
+
+def append_index(sid, files, meta):
+    """One line per session in data/sessions.csv: what was recorded, how big."""
+    path = session.data_dir() / SESSIONS_INDEX
+    streams = sorted(files)
+    total = sum(p.stat().st_size for ps in files.values() for p in ps if p.is_file())
+    row = {
+        "session_id": sid,
+        "started_iso": meta.get("started_iso", ""),
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "participant_id": meta.get("participant_id", ""),
+        "game_key": (f"{meta.get('platform_id') or 'UNKNOWN'}_{meta['game_id']}"
+                     if meta.get("game_id") else ""),
+        "game_mode": meta.get("game_mode", ""),
+        "queue_type": meta.get("queue_type", ""),
+        "champion": meta.get("champion", ""),
+        "team": meta.get("team", ""),
+        "streams": "|".join(streams),
+        "total_mb": round(total / 1e6, 1),
+        "labels": "yes" if any(p.name.endswith("_labels.json") for ps in files.values() for p in ps) else "no",
+    }
+    new = not path.is_file()
+    try:
+        with path.open("a", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(row))
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except OSError as exc:
+        print(f"Could not append to {path}: {exc}")
+
+
 # ------------------ main ------------------
 
 def main():
@@ -179,6 +287,19 @@ def main():
     # Give the recorders a moment to finish flushing to disk.
     time.sleep(2)
 
+    # The client's own post-game stats, then the player's own account of their
+    # deaths (one minute, while it is fresh). Both are best-effort and both write
+    # into data/gamestate, so they are picked up by session_files() below.
+    if meta:
+        try:
+            save_eog(sid, meta)
+        except Exception as exc:
+            print(f"Post-game stats skipped: {exc}")
+        try:
+            self_labels.collect(sid, meta)
+        except Exception as exc:
+            print(f"Self-labels skipped: {exc}")
+
     files = session_files(sid)
     if "video" not in files:
         # obs_recorder did not run (OBS off, websocket disabled, library
@@ -190,6 +311,14 @@ def main():
     if not files:
         print("No files found for this session — nothing to upload.")
         return
+
+    try:
+        manifest = write_manifest(sid, files, meta)
+        files.setdefault("gamestate", []).append(manifest)
+        append_index(sid, files, meta)
+        print(f"Manifest  : {manifest.name}; index {SESSIONS_INDEX} updated")
+    except Exception as exc:
+        print(f"Manifest skipped: {exc}")
 
     print("\nUploading:")
     for stream, paths in files.items():

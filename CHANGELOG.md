@@ -109,6 +109,31 @@ session, in the team repository's `playsmart` package (`playsmart postgame`). Th
 prototype in `tools/replay/` stays for reference; the package version adds temporal
 gating and the fog-on pass.
 
+### Keep everything the sources already send (25 Sep 2026) — collection wrap-up
+
+Before the rig is frozen: every session should carry everything the Live Client, the
+League client and the Tobii already deliver, so nothing has to be wished for later.
+None of this needs new hardware; the self-labels are a questionnaire and belong on
+the consent form. **Untested on the lab hardware** at the time of writing — run T2
+and T4 once after pulling.
+
+| file | change | reason |
+|---|---|---|
+| `src/liveclient_recorder.py` | Gamestate rows gain `move_speed`, `attack_range`, `attack_speed`, `attack_damage`, `ability_power`, `armor`, `magic_resist`, `ability_haste`, `tenacity`, `ability_levels` (Q/W/E/R), `items`, `items_usable`. New **`<sid>_players.csv`**: every player's level, death state, scores and items per poll (champion + team, no Riot IDs). Meta gains `skin_id`/`skin_name`, `summoner_spells`, `runes`, `abilities`, the same per roster entry, the client context below, and the per-PC measurements (`minimap_rect_px`, `gaze_validation`). | Movement speed and ranges at 2 Hz are what a threat model needs; Match-V5 has them once a minute. `items_usable` says whether the escape item was off cooldown. The skin decides the minimap icon. |
+| `src/lcu.py` | `client_context()`: game settings (resolution, `MinimapScale`, `GlobalScale`), input settings (key bindings), queue context (solo queue / custom / ranked), tier per ranked queue. `end_of_game_stats()`: the post-game stats block, scrubbed of names, with a `game_id` check. `scrub_names()`. | Replaces the 14 % × 25 % minimap guess with the client's own numbers; the input log cannot say which key was a ping without the bindings; the post-game block exists for Practice Tool and customs, which Match-V5 never records. |
+| `src/pop_up_screen.py` | After the recorders stop: `<sid>_eog.json` (post-game stats, waits up to `PLAYSMART_EOG_WAIT_S`, default 45 s), the self-label dialog, **`<sid>_manifest.json`** (size and SHA-256 of every file of the session) and one line in **`data/sessions.csv`**. All before the upload; all best-effort. | A dataset that can be checked file by file on the server or a handover drive; an index of what exists without walking folders. |
+| `src/self_labels.py` **new** | One dialog after each game: the player's own deaths (from the events stream) with *knew / didn't look / didn't know / not sure* each, one ordinal question (calmer / same / more tilted than the last game), a free note. `<sid>_labels.json`. `PLAYSMART_SELF_LABELS=0` disables; skipped without a display; never blocks the upload past 3 minutes. | The analysis sorts deaths into the same three buckets from fog, positions and gaze; the player's own answer one minute later is the cheapest second label there is. A second label, not ground truth. |
+| `src/eye_tracking_script.py` | Per sample: `left_valid`, `right_valid`, `head_x_mm`, `head_y_mm`, `head_dist_mm` (gaze origin in user coordinates), `device_time_stamp`, `system_time_stamp`, `left_openness`, `right_openness` (eye-openness stream, when the SDK and device provide it). New `<sid>_gaze.json`: tracker model, serial, frequency, display size in mm, screen px, sample count, valid share, median head distance. | Head distance turns pixel error into degrees; eye openness gives blink rate; the tracker's own timestamps let a dropped sample be told from a slow callback. All of it was in the callback already. |
+| `src/gaze_validation.py` **new** | Once per player setup, after the Tobii calibration: five dots, 1.5 s each → accuracy (mean offset) and precision (RMS) in px and degrees, to `data/gaze/validation_<stamp>.json`; then two SPACE presses on the minimap's corners → `data/json/minimap_rect.json`. Both are copied into every later session's meta. | "Was the player looking at the minimap" is only as good as the accuracy number, and nobody had one. The minimap rectangle depends on resolution and scale. |
+| `src/obs_recorder.py` | `<sid>_video.json` gains OBS's `GetStats` (skipped/total frames, render time, CPU) and `GetVideoSettings` (canvas and output size, fps). | Dropped frames are the data-quality number for video; the canvas size maps screen pixels onto video pixels for the camera-box reader in the team repository. |
+| `src/check_session.py` | Reports queue, tier, skin, client settings, whether the minimap rectangle and a gaze validation are on record, and whether the post-game stats, self-labels and manifest exist. | |
+| `.env.example` | `PLAYSMART_SELF_LABELS`, `PLAYSMART_EOG_WAIT_S`; `PLAYSMART_SKIP=eda,emotion` recommended for the lab PCs. | EDA was never verified end to end; emotion produced 99 % Neutral in the archive and is the one stream with an AI Act Art. 5(1)(f) question. Off by decision until both change. |
+
+The merge in the team repository reads all of it (`_players.csv`, the new gamestate
+columns, `minimap_rect_px`, `input_settings` for pings, `_gaze.json`), and derives
+pings, minimap clicks, voice activity and the fight start per death from streams that
+were already recorded.
+
 ### Not changed, on purpose
 
 - `auto_merge.py` / the server pipeline (separate repository): `AUTO_ALIGN_EMOTION` should

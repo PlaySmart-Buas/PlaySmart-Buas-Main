@@ -1,5 +1,9 @@
 """Record League game state next to the other capture streams.
 
+Modified 2026-09-25: keeps more of the payload (combat stats, ability levels, items,
+skins, spells, runes), writes ``<sid>_players.csv`` with every player's state, and
+adds the client's settings, queue and tier to the meta (``lcu.client_context``).
+
 The League game process serves a small HTTPS API on ``https://127.0.0.1:2999``
 for as long as a game is running. No API key, no rate limit, no network — it is
 the local game talking to us. It answers in Practice Tool and customs as well as
@@ -75,6 +79,21 @@ STATE_COLUMNS = [
     "creep_score", "ward_score", "is_dead", "respawn_timer",
     "hp", "max_hp", "resource", "max_resource",
     "team_kills_order", "team_kills_chaos",
+    # Added 25 Sep 2026: the active player's combat stats, ability levels and
+    # items at the poll rate. Movement speed and ranges are what a threat model
+    # needs; Match-V5 only has them once a minute.
+    "move_speed", "attack_range", "attack_speed", "attack_damage", "ability_power",
+    "armor", "magic_resist", "ability_haste", "tenacity",
+    "ability_levels", "items", "items_usable",
+]
+
+# One row per player per poll: everyone's level, death state, scores and items.
+# No Riot IDs: champion + team is unique within a game.
+PLAYER_COLUMNS = [
+    "session_id", "unix_time_ms", "game_time_s",
+    "champion", "team", "position", "level", "is_dead", "respawn_timer",
+    "kills", "deaths", "assists", "creep_score", "ward_score",
+    "items", "items_usable",
 ]
 
 EVENT_COLUMNS = [
@@ -132,6 +151,60 @@ def find_active(data: dict) -> dict:
     return {}
 
 
+def num(v, ndigits=1):
+    """Round a value; "" when it is not numeric (a blank column, not a crash)."""
+    try:
+        return round(float(v), ndigits)
+    except (TypeError, ValueError):
+        return ""
+
+
+def items_of(player: dict) -> "tuple[str, str]":
+    """``("1055|3006|2003", "2003")``: item ids by slot, and the ones usable right now.
+
+    ``canUse`` is the Live Client's word for an active item that is off cooldown
+    (Zhonya's, Stopwatch, a potion). Whether the escape was *available* is part of
+    "looked and misjudged".
+    """
+    items = sorted(player.get("items") or [], key=lambda i: i.get("slot", 0))
+    ids = [str(i.get("itemID", "")) for i in items if i.get("itemID") is not None]
+    usable = [str(i.get("itemID", "")) for i in items if i.get("canUse")]
+    return "|".join(ids), "|".join(usable)
+
+
+def ability_levels(data: dict) -> str:
+    """``"1/0/1/0"``: Q/W/E/R levels of the active player."""
+    ab = dig(data, "activePlayer", "abilities", default={}) or {}
+    return "/".join(str((ab.get(k) or {}).get("abilityLevel", "")) for k in ("Q", "W", "E", "R"))
+
+
+def player_rows(sid: str, data: dict, unix_ms: int, game_time) -> list:
+    """One PLAYER_COLUMNS row per player in allPlayers."""
+    rows = []
+    for p in dig(data, "allPlayers", default=[]) or []:
+        scores = p.get("scores", {}) or {}
+        items, usable = items_of(p)
+        rows.append({
+            "session_id": sid,
+            "unix_time_ms": unix_ms,
+            "game_time_s": game_time,
+            "champion": p.get("championName", ""),
+            "team": p.get("team", ""),
+            "position": p.get("position", ""),
+            "level": p.get("level", ""),
+            "is_dead": p.get("isDead", ""),
+            "respawn_timer": num(p.get("respawnTimer", 0)),
+            "kills": scores.get("kills", ""),
+            "deaths": scores.get("deaths", ""),
+            "assists": scores.get("assists", ""),
+            "creep_score": scores.get("creepScore", ""),
+            "ward_score": num(scores.get("wardScore", "")),
+            "items": items,
+            "items_usable": usable,
+        })
+    return rows
+
+
 def state_row(sid: str, data: dict) -> dict:
     me = find_active(data)
     scores = me.get("scores", {}) or {}
@@ -143,12 +216,7 @@ def state_row(sid: str, data: dict) -> dict:
         if team in kills:
             kills[team] += int(dig(p, "scores", "kills", default=0) or 0)
 
-    def num(v, ndigits=1):
-        try:
-            return round(float(v), ndigits)
-        except (TypeError, ValueError):
-            return ""
-
+    items, usable = items_of(me)
     return {
         "session_id": sid,
         "unix_time_ms": now_ms(),
@@ -172,6 +240,18 @@ def state_row(sid: str, data: dict) -> dict:
         "max_resource": num(stats.get("resourceMax", "")),
         "team_kills_order": kills["ORDER"],
         "team_kills_chaos": kills["CHAOS"],
+        "move_speed": num(stats.get("moveSpeed", "")),
+        "attack_range": num(stats.get("attackRange", "")),
+        "attack_speed": num(stats.get("attackSpeed", ""), 3),
+        "attack_damage": num(stats.get("attackDamage", "")),
+        "ability_power": num(stats.get("abilityPower", "")),
+        "armor": num(stats.get("armor", "")),
+        "magic_resist": num(stats.get("magicResist", "")),
+        "ability_haste": num(stats.get("abilityHaste", "")),
+        "tenacity": num(stats.get("tenacity", "")),
+        "ability_levels": ability_levels(data),
+        "items": items,
+        "items_usable": usable,
     }
 
 
@@ -217,8 +297,19 @@ def event_rows(sid: str, data: dict, seen: "set") -> list:
     return rows
 
 
+def _spells(p: dict) -> list:
+    ss = p.get("summonerSpells") or {}
+    return [str((ss.get(k) or {}).get("displayName", ""))
+            for k in ("summonerSpellOne", "summonerSpellTwo")]
+
+
+def _keystone(p: dict) -> str:
+    return str(((p.get("runes") or {}).get("keystone") or {}).get("displayName", ""))
+
+
 def meta_dict(sid: str, data: dict, started_ms: int) -> dict:
     me = find_active(data)
+    full = dig(data, "activePlayer", "fullRunes", default={}) or {}
     return {
         "session_id": sid,
         "started_unix_ms": started_ms,
@@ -240,6 +331,20 @@ def meta_dict(sid: str, data: dict, started_ms: int) -> dict:
         # without watching the footage.
         "has_bots": any(bool(p.get("isBot"))
                         for p in (dig(data, "allPlayers", default=[]) or [])),
+        # The skin decides the minimap icon (Viego's possession swaps it, some skins
+        # may too); recording it per game answers that question with data.
+        "skin_id": me.get("skinID", ""),
+        "skin_name": me.get("skinName", ""),
+        "summoner_spells": _spells(me),
+        "runes": {
+            "keystone": _keystone(me),
+            "primary_tree": str((full.get("primaryRuneTree") or {}).get("displayName", "")),
+            "secondary_tree": str((full.get("secondaryRuneTree") or {}).get("displayName", "")),
+            "ids": [r.get("id") for r in (full.get("generalRunes") or []) if r.get("id")],
+            "stat_ids": [r.get("id") for r in (full.get("statRunes") or []) if r.get("id")],
+        },
+        "abilities": {k: str((v or {}).get("id", ""))
+                      for k, v in (dig(data, "activePlayer", "abilities", default={}) or {}).items()},
         "roster": [
             {
                 "riot_id": p.get("riotId") or p.get("summonerName"),
@@ -247,10 +352,39 @@ def meta_dict(sid: str, data: dict, started_ms: int) -> dict:
                 "team": p.get("team"),
                 "position": p.get("position"),
                 "is_bot": bool(p.get("isBot", False)),
+                "skin_name": p.get("skinName", ""),
+                "summoner_spells": _spells(p),
+                "keystone": _keystone(p),
             }
             for p in (dig(data, "allPlayers", default=[]) or [])
         ],
     }
+
+
+def setup_records() -> dict:
+    """The per-PC measurements from ``gaze_validation.py``, for the session meta.
+
+    ``minimap_rect_px`` (data/json/minimap_rect.json) and the newest
+    ``gaze_validation`` (data/gaze/validation_*.json). Both optional.
+    """
+    out = {}
+    rect = Path("data/json/minimap_rect.json")
+    try:
+        if rect.is_file():
+            out["minimap_rect_px"] = json.loads(rect.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    try:
+        gaze_dir = playsmart_session.data_dir() / "gaze"
+        latest = sorted(gaze_dir.glob("validation_*.json"))
+        if latest:
+            v = json.loads(latest[-1].read_text(encoding="utf-8"))
+            out["gaze_validation"] = {k: v.get(k) for k in (
+                "when", "accuracy_px", "precision_rms_px", "accuracy_deg",
+                "precision_rms_deg", "head_dist_mm", "screen_px")}
+    except (OSError, ValueError):
+        pass
+    return out
 
 
 def add_identity(meta: dict, meta_file: Path) -> None:
@@ -266,6 +400,13 @@ def add_identity(meta: dict, meta_file: Path) -> None:
     except Exception as exc:  # never let this reach the recording thread
         ident = {"identity_source": f"error: {exc}"}
     meta.update(ident)
+    # Session context from the client (added 25 Sep 2026): the game and input
+    # settings (where the minimap is, which key is a ping), the queue (solo queue /
+    # custom / ranked) and the account's tier. Each part is best-effort.
+    try:
+        meta.update(lcu.client_context())
+    except Exception as exc:
+        meta["context_source"] = f"error: {exc}"
     try:
         meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     except OSError as exc:
@@ -312,6 +453,7 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
     out_dir.mkdir(parents=True, exist_ok=True)
 
     meta = meta_dict(sid, data, started)
+    meta.update(setup_records())
     meta_file = out_dir / f"{sid}_meta.json"
     meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     # The game id comes from the League client, not this API; asking can take a few
@@ -326,14 +468,18 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
 
     state_file = out_dir / f"{sid}_gamestate.csv"
     event_file = out_dir / f"{sid}_events.csv"
+    players_file = out_dir / f"{sid}_players.csv"
 
     try:
         with state_file.open("w", newline="", encoding="utf-8") as sf, \
-             event_file.open("w", newline="", encoding="utf-8") as ef:
+             event_file.open("w", newline="", encoding="utf-8") as ef, \
+             players_file.open("w", newline="", encoding="utf-8") as pf:
             sw = csv.DictWriter(sf, fieldnames=STATE_COLUMNS)
             ew = csv.DictWriter(ef, fieldnames=EVENT_COLUMNS)
+            pw = csv.DictWriter(pf, fieldnames=PLAYER_COLUMNS)
             sw.writeheader()
             ew.writeheader()
+            pw.writeheader()
 
             while True:
                 if stop is not None and stop.is_set():
@@ -344,7 +490,9 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
 
                 if data is not None:
                     misses = 0
-                    sw.writerow(state_row(sid, data))
+                    row = state_row(sid, data)
+                    sw.writerow(row)
+                    pw.writerows(player_rows(sid, data, row["unix_time_ms"], row["game_time_s"]))
                     ended = False
                     for row in event_rows(sid, data, seen):
                         ew.writerow(row)
@@ -353,6 +501,7 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
                             ended = True
                     sf.flush()
                     ef.flush()
+                    pf.flush()
                     if ended:
                         break
                 else:
@@ -370,7 +519,8 @@ def record_game(sid: str, out_dir: Path, first: "dict | None" = None,
         if on_end is not None:
             on_end.set()
 
-    print(f"[liveclient] wrote {state_file.name} and {event_file.name}", flush=True)
+    print(f"[liveclient] wrote {state_file.name}, {event_file.name} and {players_file.name}",
+          flush=True)
     return meta
 
 

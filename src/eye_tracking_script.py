@@ -7,11 +7,18 @@ Modified 2026-09 (iteration 5, League of Legends port):
 * a missing tracker refuses to record; PLAYSMART_MOCK_GAZE=1 writes mock rows flagged
   gaze_valid=False for plumbing tests only;
 * two commented-out legacy copies of this script removed (they are in git history).
+
+Modified 2026-09-25: keeps more of what the Tobii already sends - per-eye validity,
+the gaze origin in user coordinates (head position and distance to the screen), the
+tracker's own timestamps, and eye openness when the SDK/device provide it (blink
+rate). Writes `<sid>_gaze.json` with the tracker, its frequency and the display
+geometry, so gaze accuracy can be stated in degrees, not just pixels.
 """
 
 import time
 import os
 import sys
+import json
 import random
 from pathlib import Path
 import pandas as pd
@@ -79,6 +86,29 @@ baseline_pupil = None
 previous_avg_pupil = None
 
 # ---------------------------
+# EYE OPENNESS (optional stream, newer SDKs / devices only)
+# ---------------------------
+latest_openness = {"left": None, "right": None, "left_valid": None, "right_valid": None}
+openness_supported = False
+
+
+def openness_callback(data):
+    latest_openness["left"] = data.get("left_eye_openness_value")
+    latest_openness["right"] = data.get("right_eye_openness_value")
+    latest_openness["left_valid"] = data.get("left_eye_validity")
+    latest_openness["right_valid"] = data.get("right_eye_validity")
+
+
+def _origin(gaze_data, side):
+    """(x, y, z) of an eye in the user coordinate system, mm; None when not tracked."""
+    o = gaze_data.get(f"{side}_gaze_origin_in_user_coordinate_system")
+    ok = gaze_data.get(f"{side}_gaze_origin_validity")
+    if not o or (ok is not None and not ok):
+        return (None, None, None)
+    return tuple(o)
+
+
+# ---------------------------
 # MOCK DATA
 # ---------------------------
 def generate_mock_gaze():
@@ -103,11 +133,30 @@ def gaze_data_callback(gaze_data):
         right_gaze_x, right_gaze_y = generate_mock_gaze()
         left_pupil = generate_mock_pupil()
         right_pupil = generate_mock_pupil()
+        left_valid = right_valid = False
+        lox = loy = loz = rox = roy = roz = None
+        device_ts = system_ts = None
     else:
         left_gaze_x, left_gaze_y = gaze_data.get('left_gaze_point_on_display_area', (None, None))
         right_gaze_x, right_gaze_y = gaze_data.get('right_gaze_point_on_display_area', (None, None))
         left_pupil = gaze_data.get('left_pupil_diameter', None)
         right_pupil = gaze_data.get('right_pupil_diameter', None)
+        left_valid = gaze_data.get('left_gaze_point_validity')
+        right_valid = gaze_data.get('right_gaze_point_validity')
+        lox, loy, loz = _origin(gaze_data, "left")
+        rox, roy, roz = _origin(gaze_data, "right")
+        device_ts = gaze_data.get('device_time_stamp')
+        system_ts = gaze_data.get('system_time_stamp')
+
+    # Head position: the mean of the two eye origins, in the tracker's user
+    # coordinate system (mm; z is the distance from the screen plane). Free with
+    # every sample, and what turns a pixel error into a visual-angle error.
+    zs = [z for z in (loz, roz) if z is not None]
+    head_dist = sum(zs) / len(zs) if zs else None
+    xs = [v for v in (lox, rox) if v is not None]
+    ys = [v for v in (loy, roy) if v is not None]
+    head_x = sum(xs) / len(xs) if xs else None
+    head_y = sum(ys) / len(ys) if ys else None
 
     # Average gaze.
     #
@@ -184,12 +233,61 @@ def gaze_data_callback(gaze_data):
         "baseline_pupil": baseline_pupil,
         "pupil_dilation": pupil_dilation,       # vs baseline
         "pupil_delta_change": pupil_delta_change,  # NEW
-        "screen_resolution": screen_resolution
+        "screen_resolution": screen_resolution,
+        # 25 Sep 2026: kept from the same sample
+        "left_valid": left_valid,
+        "right_valid": right_valid,
+        "head_x_mm": head_x,
+        "head_y_mm": head_y,
+        "head_dist_mm": head_dist,
+        "device_time_stamp": device_ts,
+        "system_time_stamp": system_ts,
+        "left_openness": latest_openness["left"],
+        "right_openness": latest_openness["right"],
     })
 
 # Subscribe
 if not use_mock_data:
     my_eyetracker.subscribe_to(tr.EYETRACKER_GAZE_DATA, gaze_data_callback, as_dictionary=True)
+    # Eye openness is a separate stream (tobii_research >= 1.10, and only on devices
+    # that measure it). Absent, it costs nothing: the columns stay empty.
+    try:
+        my_eyetracker.subscribe_to(tr.EYETRACKER_EYE_OPENNESS_DATA, openness_callback,
+                                   as_dictionary=True)
+        openness_supported = True
+        print("Eye openness stream: on")
+    except Exception as exc:
+        print(f"Eye openness stream: not available ({exc})")
+
+
+def tracker_info():
+    """What we know about the tracker and the screen, for <sid>_gaze.json."""
+    info = {
+        "screen_px": [screen_width, screen_height],
+        "mock": use_mock_data,
+        "eye_openness": openness_supported,
+    }
+    if my_eyetracker is None:
+        return info
+    for attr in ("model", "serial_number", "device_name", "firmware_version", "runtime_version"):
+        try:
+            info[attr] = getattr(my_eyetracker, attr)
+        except Exception:
+            pass
+    try:
+        info["frequency_hz"] = my_eyetracker.get_gaze_output_frequency()
+    except Exception:
+        pass
+    try:
+        area = my_eyetracker.get_display_area()
+        info["display_mm"] = [round(area.width, 1), round(area.height, 1)]
+        info["display_corners_mm"] = {
+            "top_left": list(area.top_left), "top_right": list(area.top_right),
+            "bottom_left": list(area.bottom_left),
+        }
+    except Exception:
+        pass
+    return info
 
 # ---------------------------
 # MAIN LOOP
@@ -211,6 +309,11 @@ try:
 finally:
     if my_eyetracker is not None:
         my_eyetracker.unsubscribe_from(tr.EYETRACKER_GAZE_DATA, gaze_data_callback)
+        if openness_supported:
+            try:
+                my_eyetracker.unsubscribe_from(tr.EYETRACKER_EYE_OPENNESS_DATA, openness_callback)
+            except Exception:
+                pass
 
     if not gaze_data_list:
         print("No data recorded.")
@@ -222,6 +325,22 @@ finally:
 
         valid = df["gaze_valid"].mean() if "gaze_valid" in df else float("nan")
         print(f"CSV saved: {csv_path}  ({len(df):,} samples, {valid:.1%} valid)")
+
+        # Tracker and screen geometry, once per session, next to the samples.
+        try:
+            info = tracker_info()
+            info.update({
+                "session_id": session.session_id(),
+                "samples": int(len(df)),
+                "valid_share": round(float(valid), 4) if valid == valid else None,
+                "head_dist_mm_median": (round(float(df["head_dist_mm"].dropna().median()), 1)
+                                        if df["head_dist_mm"].notna().any() else None),
+            })
+            json_path = session.stream_path("gaze", ext="json")
+            json_path.write_text(json.dumps(info, indent=2), encoding="utf-8")
+            print(f"Tracker info saved: {json_path}")
+        except Exception as exc:
+            print(f"Could not write the tracker info: {exc}")
 
         # ---------------------------
         # SAVE GRAPH (DILATION)

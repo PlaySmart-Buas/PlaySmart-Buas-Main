@@ -1,7 +1,8 @@
 """Read the League client's identity for the game being captured.
 
 Added 2026-09 (iteration 5). Modified 2026-09-24: platform lookup falls back to the
-chat identity and the client region.
+chat identity and the client region. Modified 2026-09-25: ``client_context`` (game and
+input settings, queue, tier) and ``end_of_game_stats`` (the post-game block, scrubbed).
 
 The Live Client Data API (``liveclient_recorder.py``) says everything about the game
 *in progress* except which game it is: there is no game id in its payload. Without
@@ -98,6 +99,58 @@ class Client:
         except (requests.RequestException, ValueError):
             return None
 
+    # --- session context (added 25 Sep 2026) ----------------------------------------
+
+    def game_settings(self) -> dict:
+        """The client's game.cfg as JSON: General (resolution, window mode), HUD
+        (MinimapScale, GlobalScale) and the rest. Replaces the 14 % x 25 % minimap guess."""
+        data = self.get("/lol-game-settings/v1/game-settings")
+        return data if isinstance(data, dict) else {}
+
+    def input_settings(self) -> dict:
+        """The client's key bindings (GameEvents: ping wheel, smart ping, camera keys ...).
+        Players rebind; without this the input log cannot say which key was a ping."""
+        data = self.get("/lol-game-settings/v1/input-settings")
+        return data if isinstance(data, dict) else {}
+
+    def queue_context(self) -> dict:
+        """What kind of game this is: queue id/type/mode, ranked or not, custom or not."""
+        session = self.get("/lol-gameflow/v1/session") or {}
+        game = session.get("gameData") or {}
+        queue = game.get("queue") or {}
+        return {
+            "queue_id": queue.get("id", ""),
+            "queue_type": queue.get("type", ""),
+            "queue_game_mode": queue.get("gameMode", ""),
+            "queue_name": queue.get("name", ""),
+            "is_ranked": bool(queue.get("isRanked", False)),
+            "is_custom": bool(game.get("isCustomGame", False)),
+            "map_id": (session.get("map") or {}).get("id", ""),
+        }
+
+    def ranked_tier(self) -> dict:
+        """Tier and division per ranked queue, nothing else. Pseudonymous on its own."""
+        data = self.get("/lol-ranked/v1/current-ranked-stats") or {}
+        out = {}
+        for q in data.get("queues") or []:
+            name = q.get("queueType", "")
+            if not name or not q.get("tier"):
+                continue
+            out[name] = {
+                "tier": q.get("tier", ""),
+                "division": q.get("division", ""),
+                "lp": q.get("leaguePoints", ""),
+                "wins": q.get("wins", ""),
+                "losses": q.get("losses", ""),
+            }
+        return out
+
+    def end_of_game_stats(self) -> dict:
+        """The post-game stats block, scrubbed of names. Available a few seconds after
+        the game ends - for Practice Tool and customs too, which Match-V5 never records."""
+        data = self.get("/lol-end-of-game/v1/eog-stats-block")
+        return scrub_names(data) if isinstance(data, dict) and data else {}
+
 
 REGION_TO_PLATFORM = {
     "EUW": "EUW1", "EUNE": "EUN1", "NA": "NA1", "KR": "KR", "JP": "JP1", "BR": "BR1",
@@ -121,6 +174,71 @@ def platform_of(client: Client) -> str:
         return v.upper()
     region = (client.get("/riotclient/region-locale") or {}).get("region", "")
     return REGION_TO_PLATFORM.get(str(region).upper(), "")
+
+
+PERSONAL_KEYS = {
+    "summonerName", "summonerId", "accountId", "puuid", "riotIdGameName",
+    "riotIdTagLine", "riotIdTagline", "gameName", "tagLine", "profileIconId", "botPlayer",
+}
+
+
+def scrub_names(obj):
+    """Drop every personal identifier from a nested client response, recursively."""
+    if isinstance(obj, dict):
+        return {k: scrub_names(v) for k, v in obj.items() if k not in PERSONAL_KEYS}
+    if isinstance(obj, list):
+        return [scrub_names(v) for v in obj]
+    return obj
+
+
+def client_context(client: Client | None = None) -> dict:
+    """Everything worth keeping about the client at capture time, best-effort.
+
+    ``game_settings``, ``input_settings``, the queue context and ``ranked``. Any part
+    that fails is simply absent; nothing here may delay or break a recording.
+    """
+    client = client or Client.connect()
+    if client is None:
+        return {}
+    out = {}
+    for name, fn in (("game_settings", client.game_settings),
+                     ("input_settings", client.input_settings),
+                     ("ranked", client.ranked_tier)):
+        try:
+            value = fn()
+        except Exception:  # an undocumented API; never fail the capture
+            value = None
+        if value:
+            out[name] = value
+    try:
+        out.update(client.queue_context())
+    except Exception:
+        pass
+    return out
+
+
+def end_of_game_stats(game_id: str = "", wait_s: float = 60.0, client: Client | None = None) -> dict:
+    """Poll for the post-game stats block for up to ``wait_s`` seconds.
+
+    The client fills it a few seconds after the game ends. With ``game_id`` the block
+    is only accepted when it is for that game (an older block from the previous game
+    is ignored). Returns {} when nothing arrived in time.
+    """
+    import time
+    client = client or Client.connect()
+    if client is None:
+        return {}
+    deadline = time.time() + wait_s
+    while True:
+        try:
+            block = client.end_of_game_stats()
+        except Exception:
+            block = {}
+        if block and (not game_id or str(block.get("gameId", "")) == str(game_id)):
+            return block
+        if time.time() >= deadline:
+            return {}
+        time.sleep(3.0)
 
 
 def game_identity(client: Client | None = None) -> dict:

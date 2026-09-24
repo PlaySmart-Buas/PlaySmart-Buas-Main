@@ -131,6 +131,48 @@ def _locate_frame_zero(client) -> float | None:
     return statistics.median(samples)
 
 
+def _stats(client) -> dict:
+    """OBS's own account of the recording: dropped frames and the video geometry.
+
+    ``GetStats`` gives render/output frame counts and skips; ``GetVideoSettings``
+    the base (canvas) and output resolution and the frame rate. Both are
+    best-effort - a missing field leaves a key out, nothing fails.
+    """
+    out: dict = {}
+    try:
+        st = client.get_stats()
+        for key in (
+            "output_skipped_frames",
+            "output_total_frames",
+            "render_skipped_frames",
+            "render_total_frames",
+            "average_frame_render_time",
+            "cpu_usage",
+            "available_disk_space",
+        ):
+            v = getattr(st, key, None)
+            if v is not None:
+                out[key] = v
+    except Exception as exc:
+        out["stats_error"] = str(exc)
+    try:
+        vs = client.get_video_settings()
+        for key, name in (
+            ("base_width", "canvas_width"),
+            ("base_height", "canvas_height"),
+            ("output_width", "output_width"),
+            ("output_height", "output_height"),
+            ("fps_numerator", "fps_numerator"),
+            ("fps_denominator", "fps_denominator"),
+        ):
+            v = getattr(vs, key, None)
+            if v is not None:
+                out[name] = v
+    except Exception as exc:
+        out["video_settings_error"] = str(exc)
+    return out
+
+
 def start(sid: str) -> dict | None:
     """Start an OBS recording for this session.
 
@@ -179,6 +221,10 @@ def stop(sid: str, handle: dict | None) -> Path | None:
     if not handle:
         return None
     client = handle["client"]
+    # Recording quality, read before the output closes: dropped frames are the
+    # data-quality number for video, and the canvas/output size is what the
+    # analysis needs to map screen pixels onto video pixels.
+    stats = _stats(client)
     try:
         response = client.stop_record()
         source = Path(getattr(response, "output_path", "") or "")
@@ -210,6 +256,7 @@ def stop(sid: str, handle: dict | None) -> Path | None:
         "session_id": sid,
         "video_file": target.name,
         "t0_unix_ms": handle.get("t0_unix_ms"),
+        **stats,
         "note": ("t0_unix_ms is the wall-clock time of the first frame. A frame at "
                  "T seconds into the file is at t0_unix_ms + T*1000. Convert that to "
                  "game time through the gamestate stream, which carries both clocks."),
