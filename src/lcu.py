@@ -1,6 +1,7 @@
 """Read the League client's identity for the game being captured.
 
-Added 2026-09 (iteration 5).
+Added 2026-09 (iteration 5). Modified 2026-09-24: platform lookup falls back to the
+chat identity and the client region.
 
 The Live Client Data API (``liveclient_recorder.py``) says everything about the game
 *in progress* except which game it is: there is no game id in its payload. Without
@@ -98,6 +99,30 @@ class Client:
             return None
 
 
+REGION_TO_PLATFORM = {
+    "EUW": "EUW1", "EUNE": "EUN1", "NA": "NA1", "KR": "KR", "JP": "JP1", "BR": "BR1",
+    "LAN": "LA1", "LAS": "LA2", "OCE": "OC1", "TR": "TR1", "RU": "RU", "ME": "ME1",
+    "SG": "SG2", "TW": "TW2", "VN": "VN2",
+}
+
+
+def platform_of(client: Client) -> str:
+    """Platform of the logged-in account (``EUW1``), or "".
+
+    Tried in order because Riot moves these between client versions: the login data
+    packet (empty on the 24 Sep test, which left a game keyed ``UNKNOWN_<id>``), the
+    chat identity, then the client's region mapped to its platform.
+    """
+    v = client.get("/lol-platform-config/v1/namespaces/LoginDataPacket/platformId")
+    if isinstance(v, str) and v:
+        return v.upper()
+    v = (client.get("/lol-chat/v1/me") or {}).get("platformId")
+    if isinstance(v, str) and v:
+        return v.upper()
+    region = (client.get("/riotclient/region-locale") or {}).get("region", "")
+    return REGION_TO_PLATFORM.get(str(region).upper(), "")
+
+
 def game_identity(client: Client | None = None) -> dict:
     """Everything the client knows that identifies the current game.
 
@@ -120,9 +145,7 @@ def game_identity(client: Client | None = None) -> dict:
     if queue.get("id") is not None:
         out["queue_id"] = str(queue["id"])
 
-    platform = client.get("/lol-platform-config/v1/namespaces/LoginDataPacket/platformId")
-    if isinstance(platform, str):
-        out["platform_id"] = platform
+    out["platform_id"] = platform_of(client)
     summoner = client.get("/lol-summoner/v1/current-summoner") or {}
     out["puuid"] = summoner.get("puuid", "") or ""
     version = client.get("/lol-patch/v1/game-version")
