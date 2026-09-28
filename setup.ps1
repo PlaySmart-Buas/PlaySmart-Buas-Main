@@ -141,7 +141,13 @@ if ($SkipOpenFace) {
 # --------------------------------------------------------------------- 4. .env
 Step "Secrets (.env)"
 $envFile = Join-Path $Repo ".env"
-if (-not (Test-Path $envFile)) { Copy-Item (Join-Path $Repo ".env.example") $envFile; Ok "created .env from .env.example" } else { Ok ".env exists" }
+if (-not (Test-Path $envFile)) { Copy-Item (Join-Path $Repo ".env.example") $envFile; Ok "created .env from .env.example" }
+else {
+    # .env is untracked, so git pull never updates it: append keys that are new in
+    # .env.example (values already there are never changed) and fix trailing comments.
+    poetry run python src\preflight.py --env-only --fix-env
+    Ok ".env exists (synced with .env.example)"
+}
 if (-not $NoPrompt) {
     $content = Get-Content $envFile -Raw
     if ($content -match "PLAYSMART_OBS_PASSWORD=\s*(\r?\n|$)") {

@@ -42,7 +42,9 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 `setup.ps1` installs Git, Python 3.10, OBS Studio, the VC++ 2017 runtime and the GitHub
 CLI through winget; installs Poetry and builds the environment on 3.10 (`tobii-research`
 ships cp310 wheels only); downloads OpenFace 2.2.0 and its CEN models; creates `.env`
-from `.env.example` and asks for the OBS and SFTP passwords. It is idempotent — re-run it
+from `.env.example` and asks for the OBS and SFTP passwords; when `.env` already exists it
+appends any keys that are new in `.env.example` (`preflight.py --fix-env`; existing values
+are never changed — `.env` is untracked, so `git pull` alone never updates it). It is idempotent — re-run it
 after a partial failure. `-SkipInstalls`, `-SkipOpenFace`, `-WithTranscription`,
 `-WithVision` are documented at the top of the script.
 

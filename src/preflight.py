@@ -21,6 +21,7 @@ import argparse
 import logging
 import os
 import platform
+import re
 import shutil
 import socket
 import sys
@@ -74,9 +75,86 @@ def check_imports() -> None:
         report(OK, "packages", f"{len(needed)} capture imports resolve")
 
 
-def check_env_file() -> None:
+_KEY_RE = re.compile(r"^#?\s*([A-Z][A-Z0-9_]*)=(.*)$")
+
+
+def env_template_diff(env_path: Path, example_path: Path):
+    """Compare .env with .env.example.
+
+    Returns (missing, trailing): ``missing`` are the template lines (active or
+    commented) whose key does not appear in .env at all; ``trailing`` are .env
+    lines whose value carries a ``# comment`` after it, which the loader keeps as
+    part of the value (``PLAYSMART_SKIP=eda   # ring`` skips nothing).
+    """
+    present = set()
+    trailing = []
+    if env_path.is_file():
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                m = _KEY_RE.match(line)
+                if m:
+                    present.add(m.group(1))
+                continue
+            key, _, value = line.partition("=")
+            present.add(key.strip())
+            if " #" in value or "\t#" in value:
+                trailing.append(raw)
+    missing = []
+    if example_path.is_file():
+        for raw in example_path.read_text(encoding="utf-8").splitlines():
+            m = _KEY_RE.match(raw.strip())
+            if m and m.group(1) not in present:
+                missing.append(raw.rstrip())
+    return missing, trailing
+
+
+def sync_env_file(env_path: Path, example_path: Path) -> tuple[int, int]:
+    """Append template keys missing from .env and move trailing comments to their own line.
+
+    Existing values are never changed. Appended lines are exactly as in
+    .env.example (commented ones stay commented), under a dated header.
+    """
+    missing, trailing = env_template_diff(env_path, example_path)
+    if not env_path.is_file():
+        return 0, 0
+    text = env_path.read_text(encoding="utf-8")
+    if trailing:
+        lines = text.splitlines()
+        for i, raw in enumerate(lines):
+            if raw in trailing:
+                key_value, _, comment = raw.partition("#")
+                lines[i] = f"# {comment.strip()}\n{key_value.rstrip()}"
+        text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+    if missing:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += (f"\n# --- added from .env.example by preflight --fix-env on "
+                 f"{time.strftime('%Y-%m-%d')} (defaults; edit as needed) ---\n")
+        text += "\n".join(missing) + "\n"
+    env_path.write_text(text, encoding="utf-8")
+    return len(missing), len(trailing)
+
+
+def check_env_file(fix: bool = False) -> None:
+    example = REPO / ".env.example"
     if session.ENV_FILE.is_file():
         report(OK, ".env", str(session.ENV_FILE))
+        if fix:
+            added, moved = sync_env_file(session.ENV_FILE, example)
+            if added or moved:
+                report(OK, ".env sync", f"{added} key(s) added from .env.example, "
+                       f"{moved} trailing comment(s) moved to their own line - "
+                       "re-run preflight so the new values load")
+        missing, trailing = env_template_diff(session.ENV_FILE, example)
+        if trailing:
+            report(FAIL, ".env comments", f"{len(trailing)} line(s) have a '# comment' after the "
+                   "value; the loader keeps it as part of the value. Run preflight.py --fix-env "
+                   "or move the comment to its own line: " + trailing[0].strip())
+        if missing:
+            keys = ", ".join(m.lstrip("# ").partition("=")[0] for m in missing)
+            report(WARN, ".env template", f"{len(missing)} key(s) in .env.example not in .env "
+                   f"({keys}) - defaults apply; preflight.py --fix-env appends them")
     else:
         report(WARN, ".env", "not found - copy .env.example and fill in the passwords")
     if os.environ.get("PLAYSMART_OBS", "1") != "0" and not os.environ.get("PLAYSMART_OBS_PASSWORD"):
@@ -309,12 +387,18 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--no-ble", action="store_true", help="skip the Bluetooth scan for the EDA ring")
     ap.add_argument("--no-mic", action="store_true", help="skip the 1 s microphone level sample")
+    ap.add_argument("--fix-env", action="store_true",
+                    help="append keys new in .env.example to .env and fix trailing comments (values untouched)")
+    ap.add_argument("--env-only", action="store_true", help="only the .env checks (used by setup.ps1)")
     args = ap.parse_args()
 
     print(f"PlaySmart pre-flight  {time.strftime('%Y-%m-%d %H:%M:%S')}  {platform.node()}  repo {REPO}\n")
+    if args.env_only:
+        check_env_file(fix=args.fix_env)
+        raise SystemExit(1 if _failures else 0)
     check_python()
     check_imports()
-    check_env_file()
+    check_env_file(fix=args.fix_env)
     check_disk()
     check_display()
     check_tracker()
