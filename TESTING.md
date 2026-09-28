@@ -163,8 +163,12 @@ play at least **five minutes**, including all of:
 Watch the console for, in order: `started` ×5, `started video (frame zero at …)`,
 `Game over.`, `video saved: <sid>_video.mkv`, `saved and exited` ×5 (or `exited cleanly
 but wrote nothing` for a stream you skipped — that is the honest message, not an error),
-`Session output:` all `ok` including `video`, then the upload. `/data/gamestate/` upload
-failing is expected until the directory exists on the server.
+`Session output:` all `ok` including `video`, then `Uploading (keep):` and a line
+`Upload    : N uploaded  (local copies kept)`. Off the BUas network it says
+`SFTP server not reachable … files kept locally` after ten seconds instead of hanging;
+send them later with `poetry run python src\upload_session.py --pending`. The uploader
+tries to create `/data/gamestate/` on the server; if the sftp user may not, that stream
+stays local until Uther adds the directory.
 
 Then `poetry run python src\check_session.py`.
 
@@ -266,7 +270,10 @@ present yes/no, ring paired yes/no.
 
 ## 6. Things that will look wrong but are not
 
-- `/data/gamestate/` upload fails — the server directory does not exist yet.
+- `!! /data/gamestate/ does not exist on the server and could not be created` — the
+  directory is missing on the server; the files stay local and `upload_session.py
+  --pending` sends them once it exists.
+- `Upload : 4 exists` on a re-run — already on the server with the same size, not re-sent.
 - `WITH BOTS` and `PRACTICETOOL` in the report — Practice Tool has no Riot match id, so no
   Match-V5 timeline will ever attach to these sessions; fine for testing the pipeline.
 - Emotion ~95 % `Neutral` — `map_emotion()` requires several action units to fire at once
@@ -286,7 +293,12 @@ present yes/no, ring paired yes/no.
 - **`data/json/ign_mapping.json`** maps Riot IDs to participant numbers. It is the
   re-identification key: it stays on the capture PC, is never uploaded, never committed.
 - The SFTP password must be rotated on the server; the old one is in this repository's
-  git history forever.
+  git history forever. Until it is, leave `PLAYSMART_SFTP_PASSWORD` empty (`Upload off`)
+  and keep sessions local — nothing is lost, `upload_session.py --all` sends them later.
+- `PLAYSMART_UPLOAD=move` deletes the local copy after a size-confirmed upload. Leave it on
+  `keep` (the default) on the lab PCs until the server's disk problem is fixed: queenbee's
+  root filesystem was at 100 % in September and a full disk can still accept a `put` that
+  is later found truncated.
 
 ## 8. When something fails
 

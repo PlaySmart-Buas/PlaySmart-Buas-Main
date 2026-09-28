@@ -19,7 +19,9 @@ None of that guessing is needed any more. Every recorder now names its own file
 `<session_id>_<stream>.csv` when it opens it, and `liveclient_recorder.py` writes
 `<session_id>_meta.json` with the Riot ID, champion, game mode and map straight
 from the game client. So this script just collects the files carrying this
-session's id and uploads them.
+session's id and uploads them. Modified 2026-09-28: the upload goes over one
+connection, keeps the local copy unless ``PLAYSMART_UPLOAD=move``, and logs every
+outcome to ``data/upload_log.csv``; ``upload_session.py`` retries later.
 
 The free-text game dropdown is gone with it — that field produced nine spellings
 of two game names, including `valornat`, `valorant ` and `nogame`.
@@ -41,18 +43,20 @@ sys.path.append(str(SRC.parent))
 import session  # noqa: E402
 import lcu  # noqa: E402
 import self_labels  # noqa: E402
-from server.python_app.sftp_upload import upload_file_to_sftp  # noqa: E402
+from server.python_app import sftp_upload  # noqa: E402
 
 # Seconds to wait for the client's post-game stats block after the game ends.
 EOG_WAIT_S = float(os.environ.get("PLAYSMART_EOG_WAIT_S", "45"))
 SESSIONS_INDEX = "sessions.csv"
+UPLOAD_LOG = "upload_log.csv"
 
 # Local stream -> remote SFTP directory.
 #
 # NOTE: /data/gamestate/ does not exist on the server yet. The sftp container's
 # command in docker-compose.yml (PlaySmart-Server-Buas-Main) mkdir -p's each of
-# these; gamestate needs adding there. Until it is, that one upload fails
-# gracefully and the file stays local, which is fine.
+# these; gamestate needs adding there. The uploader tries to mkdir it and, if the
+# sftp user may not, reports it and keeps those files local (retry later with
+# src/upload_session.py).
 UPLOAD_MAP = {
     "gaze": "/data/gaze/",
     "input": "/data/input/",
@@ -320,7 +324,18 @@ def main():
     except Exception as exc:
         print(f"Manifest skipped: {exc}")
 
-    print("\nUploading:")
+    upload_session_files(sid, files)
+
+
+def upload_session_files(sid, files):
+    """Upload every file of the session over one connection and log the outcome.
+
+    The local copy stays unless ``PLAYSMART_UPLOAD=move`` (see sftp_upload.py).
+    Every outcome goes to ``data/upload_log.csv`` so ``upload_session.py`` can
+    retry what failed once the PC is back on the BUas network.
+    """
+    items = []
+    print(f"\nUploading ({sftp_upload.upload_mode()}):")
     for stream, paths in files.items():
         dest = UPLOAD_MAP.get(stream)
         if not dest:
@@ -330,7 +345,43 @@ def main():
             if size == 0:
                 print(f"  !! {path.name} is empty — check the {stream} recorder")
             print(f"  {stream:<10} {path.name}  ({size/1e6:.2f} MB)")
-            upload_file_to_sftp(str(path), dest)
+            items.append((path, dest, stream))
+
+    results = sftp_upload.upload_files([(p, d) for p, d, _ in items])
+    counts = {}
+    for path, dest, stream in items:
+        outcome = results.get(str(path), sftp_upload.FAILED)
+        counts[outcome] = counts.get(outcome, 0) + 1
+        log_upload(sid, stream, path, dest, outcome)
+    summary = ", ".join(f"{n} {k}" for k, n in sorted(counts.items()))
+    print(f"Upload    : {summary or 'nothing to upload'}"
+          + ("  (local copies kept)" if sftp_upload.upload_mode() != "move" else ""))
+    if any(counts.get(k) for k in (sftp_upload.FAILED, sftp_upload.OFF, sftp_upload.UNREACHABLE)):
+        print(f"            retry later: poetry run python src\\upload_session.py {sid}")
+    return results
+
+
+def log_upload(sid, stream, path, dest, outcome):
+    """One line per file per attempt in data/upload_log.csv."""
+    log = session.data_dir() / UPLOAD_LOG
+    new = not log.is_file()
+    row = {
+        "when_iso": datetime.now().isoformat(timespec="seconds"),
+        "session_id": sid,
+        "stream": stream,
+        "file": path.name,
+        "bytes": path.stat().st_size if path.is_file() else "",
+        "remote_dir": dest,
+        "outcome": outcome,
+    }
+    try:
+        with log.open("a", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(row))
+            if new:
+                w.writeheader()
+            w.writerow(row)
+    except OSError as exc:
+        print(f"Could not append to {log}: {exc}")
 
 
 if __name__ == "__main__":

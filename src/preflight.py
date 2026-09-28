@@ -81,8 +81,15 @@ def check_env_file() -> None:
         report(WARN, ".env", "not found - copy .env.example and fill in the passwords")
     if os.environ.get("PLAYSMART_OBS", "1") != "0" and not os.environ.get("PLAYSMART_OBS_PASSWORD"):
         report(WARN, "obs password", "PLAYSMART_OBS_PASSWORD empty - fine only if OBS auth is off")
-    if not os.environ.get("PLAYSMART_SFTP_PASSWORD"):
+    mode = os.environ.get("PLAYSMART_UPLOAD", "keep").strip().lower() or "keep"
+    if mode == "off":
+        report(WARN, "upload", "PLAYSMART_UPLOAD=off - files stay local, no upload")
+    elif not os.environ.get("PLAYSMART_SFTP_PASSWORD"):
         report(WARN, "sftp password", "PLAYSMART_SFTP_PASSWORD empty - files stay local, no upload")
+    elif mode == "move":
+        report(WARN, "upload", "PLAYSMART_UPLOAD=move - local copies are deleted after upload")
+    else:
+        report(OK, "upload", f"PLAYSMART_UPLOAD={mode} - upload and keep local copies")
     if os.environ.get("PLAYSMART_MOCK_GAZE") == "1":
         report(FAIL, "mock gaze", "PLAYSMART_MOCK_GAZE=1 is set - never record a real session with this")
 
