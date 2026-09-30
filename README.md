@@ -8,13 +8,24 @@ The capture toolkit has been ported from Valorant to League of Legends by the BU
 2026–27 student team. Start here:
 
 - **Set up a capture PC:** `Toolkit setup.md` — one script (`setup.ps1`), then Tobii and OBS.
-- **Prove it works:** `TESTING.md` — pre-flight check and the test sequence T1–T8.
+- **Prove it works:** `TESTING.md` — pre-flight check and the test sequence T1–T10.
 - **What changed and why:** `CHANGELOG.md` — every modified file with its reason.
 
 In short: one session id per game, automatic start/stop on the game itself, graceful
 saving (no more truncated files), League game state from the Live Client Data API, video
 driven over obs-websocket with a timing anchor, a pre-flight check, and secrets out of
-the code. Branch `feature/league-collection` until merged.
+the code. Since 25 Sep every field the sources already send is kept (Live Client combat
+stats, client settings, post-game stats block, a per-session manifest and index), and the
+upload keeps a local copy by default (`PLAYSMART_UPLOAD=keep|off|move`). The post-game
+side (replay rendering, positions, Match-V5, the merge) lives in the analysis toolkit:
+`github.com/BredaUniversityADSAI/2026-27s1-fai3-adsai-PlaySmart`.
+
+**How this was built.** The iteration-5 changes were written with substantial help from
+an AI assistant (Claude, Anthropic): the student set the direction, ran the hardware, the
+League client and the lab sessions, reviewed and tested every change on real captures,
+and applied and pushed every commit; Claude wrote most of the code and documentation to
+those instructions. The reasoning per file is in `CHANGELOG.md`; the team can explain
+every module and takes responsibility for it.
 
 # Contributing to PlaySmart
 
