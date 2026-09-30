@@ -270,6 +270,16 @@ Paste it into the pull request when done.
 Also record: OBS version, encoder, recording format, tracker model and rate, OpenFace
 present yes/no, ring paired yes/no.
 
+## 5b. Other games (Valorant rigs on `Dev`)
+
+`PLAYSMART_GAME=valorant` in `.env` (any value other than `league`): F7 starts the
+recorders at once, F12 stops them — the bracket the rig had before iteration 5 — with the
+session id, graceful stop, OBS anchor, manifest and upload modes all kept. No game-state
+stream, no post-game stats, no self-label dialog; `sessions.csv` carries the game name.
+Pre-flight reports `game  PLAYSMART_GAME=valorant - manual F7/F12 bracket`. Verify on a
+Valorant PC: T1 (dry run), then one short game with F7/F12 and `check_session.py`, which
+reports the clock mapping as absent rather than failing.
+
 ## 6. Things that will look wrong but are not
 
 - `!! /data/gamestate/ does not exist on the server and could not be created` — the

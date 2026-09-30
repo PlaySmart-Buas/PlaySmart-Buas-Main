@@ -219,6 +219,7 @@ def write_manifest(sid, files, meta):
                 entries.append({"stream": stream, "file": path.name, "error": str(exc)})
     manifest = {
         "session_id": sid,
+        "game": meta.get("game") or session.game(),
         "written_unix_ms": int(time.time() * 1000),
         "game_key": (f"{meta.get('platform_id') or 'UNKNOWN'}_{meta['game_id']}"
                      if meta.get("game_id") else ""),
@@ -237,6 +238,7 @@ def append_index(sid, files, meta):
     total = sum(p.stat().st_size for ps in files.values() for p in ps if p.is_file())
     row = {
         "session_id": sid,
+        "game": meta.get("game") or session.game(),
         "started_iso": meta.get("started_iso", ""),
         "date": datetime.now().strftime("%Y-%m-%d"),
         "participant_id": meta.get("participant_id", ""),
@@ -284,6 +286,8 @@ def main():
                 json.dumps(meta, indent=2), encoding="utf-8")
         except OSError as exc:
             print(f"Could not update meta: {exc}")
+    elif session.game() != "league":
+        print(f"Game      : {session.game()} (manual bracket; no game-state stream)")
     else:
         print("No gamestate meta for this session — the game client API was not "
               "reachable. Files will still upload, just without game labels.")

@@ -132,12 +132,18 @@ def _report_clock(state: pd.DataFrame) -> bool:
 
 
 def find_latest(data_dir: Path) -> str | None:
-    """Return the newest session id present under data/gamestate."""
+    """Return the newest session id: by meta under data/gamestate, else by any stream file."""
     gamestate = data_dir / "gamestate"
-    if not gamestate.is_dir():
+    metas = sorted(gamestate.glob("*_meta.json"), key=lambda p: p.stat().st_mtime) if gamestate.is_dir() else []
+    if metas:
+        return metas[-1].name.replace("_meta.json", "")
+    # manual-bracket games (PLAYSMART_GAME != league) write no meta: newest stream file instead
+    files = [p for d in ("gaze", "input", "audio", "video") if (data_dir / d).is_dir()
+             for p in (data_dir / d).iterdir() if p.is_file() and "_" in p.name]
+    if not files:
         return None
-    metas = sorted(gamestate.glob("*_meta.json"), key=lambda p: p.stat().st_mtime)
-    return metas[-1].name.replace("_meta.json", "") if metas else None
+    newest = max(files, key=lambda p: p.stat().st_mtime)
+    return newest.name.rsplit("_", 1)[0]
 
 
 def report(sid: str, data_dir: Path) -> bool:
@@ -220,6 +226,9 @@ def report(sid: str, data_dir: Path) -> bool:
         else:
             print(f"{BAD} gamestate CSV is empty or unreadable")
             good = False
+    elif playsmart_session.game() != "league":
+        print(f"\n  game state   none (PLAYSMART_GAME={playsmart_session.game()}: manual bracket) - "
+              "streams share the wall clock only; no in-game placement")
     else:
         print(f"\n{BAD} no gamestate CSV - no in-game clock, streams cannot be placed in the game")
         good = False

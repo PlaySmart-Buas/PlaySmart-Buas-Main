@@ -144,6 +144,12 @@ were already recorded.
 | `src/preflight.py` `--fix-env` / `--env-only`; `setup.ps1` step 4 | `.env` is untracked, so a `git pull` never brings new keys to a PC set up earlier. Pre-flight now diffs `.env` against `.env.example`: missing keys → warn (`--fix-env` appends them, values untouched); a `# comment` after a value → **FAIL**, because the loader keeps it as part of the value (`PLAYSMART_SKIP=eda   # ring` skipped nothing on a lab PC, 28 Sep). `setup.ps1` runs the sync when `.env` exists. `.env.example` has no trailing comments any more. | Every PC set up before a change gets the change without hand-editing `.env`. |
 | `tests/test_sftp_upload.py` **new** | Nine tests against an in-process paramiko SFTP server: keep, move, exists, resend on change, unwritable directory, off, unreachable, env parsing, legacy wrapper. `poetry run pytest tests/`. | The uploader is the one part of the rig that cannot be exercised on the lab PC without the server. |
 
+### `PLAYSMART_GAME` — keep `Dev` usable for Valorant (30 Sep 2026)
+
+| file | change | reason |
+|--|--|--|
+| `src/session.py` `game()`, `src/key_listener.py`, `src/pop_up_screen.py`, `src/preflight.py`, `src/liveclient_recorder.py`, `.env.example` | `PLAYSMART_GAME=league` (default) is the iteration-5 behaviour. Any other value is the manual F7/F12 bracket: no wait for League's API, no game-state stream, F12 ends the session cleanly (not an abort), pre-flight skips the League check, `sessions.csv` and the manifest carry the game name. | The org's other rigs capture Valorant from `Dev`. Without this switch a merge would have made them wait forever for a League API that never appears. They still gain the graceful stop (their 44-byte WAVs), session ids, the OBS anchor, pre-flight and the upload modes. Untested on a Valorant PC - T1 + one F7/F12 game there before relying on it. |
+
 ### Not changed, on purpose
 
 - `auto_merge.py` / the server pipeline (separate repository): `AUTO_ALIGN_EMOTION` should

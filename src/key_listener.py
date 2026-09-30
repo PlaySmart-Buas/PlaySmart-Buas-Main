@@ -280,9 +280,22 @@ def run_capture(dry_run: bool, dry_seconds: float) -> bool:
     """One armed cycle: wait for a game, record it, stop cleanly. False if aborted."""
     abort = threading.Event()
 
+    manual = session.game() != "league"
     if dry_run:
         print("[dry-run] pretending a game just started")
         first = None
+    elif manual:
+        # Valorant and other titles have no local game-state API: the operator
+        # brackets the session - F7 started it, F12 ends it - exactly as before
+        # iteration 5, but with the graceful stop, so files are complete.
+        try:
+            import keyboard  # noqa: F401 - F12 is the only way this session ends
+        except Exception as exc:  # noqa: BLE001
+            print(f"!!  PLAYSMART_GAME={session.game()} needs the `keyboard` package to see F12 ({exc}).")
+            return False
+        print(f"PLAYSMART_GAME={session.game()}: recording now; press F12 when the game is over.")
+        first = None
+        threading.Thread(target=wait_for_abort, args=(abort, abort), daemon=True).start()
     else:
         print("Armed — waiting for a game to start…")
         watcher = threading.Thread(target=wait_for_abort, args=(abort, abort), daemon=True)
@@ -317,6 +330,8 @@ def run_capture(dry_run: bool, dry_seconds: float) -> bool:
     if dry_run:
         threading.Timer(dry_seconds, game_over.set).start()
         print(f"[dry-run] ending the fake game in {dry_seconds:.0f}s")
+    elif manual:
+        pass  # no game-state stream; F12 (abort) is the normal end of the session
     else:
         out_dir = session.stream_dir("gamestate")
         threading.Thread(
@@ -330,7 +345,10 @@ def run_capture(dry_run: bool, dry_seconds: float) -> bool:
     while not game_over.is_set() and not abort.is_set():
         time.sleep(0.2)
 
-    print("Game over." if game_over.is_set() else "Aborted.")
+    if manual and abort.is_set():
+        print("F12 — session ended.")
+    else:
+        print("Game over." if game_over.is_set() else "Aborted.")
     obs_recorder.stop(sid, obs_handle)
     stop_recorders(procs, sid, dry_run)
     verify_outputs(sid, dry_run, video=obs_handle is not None)

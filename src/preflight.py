@@ -361,6 +361,9 @@ def check_obs() -> None:
 
 
 def check_league() -> None:
+    if session.game() != "league":
+        report(OK, "game", f"PLAYSMART_GAME={session.game()} - manual F7/F12 bracket, no game-state stream")
+        return
     try:
         import requests
         r = requests.get("https://127.0.0.1:2999/liveclientdata/gamestats", timeout=1.5, verify=False)

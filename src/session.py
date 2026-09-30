@@ -35,6 +35,7 @@ from pathlib import Path
 ENV_SESSION = "PLAYSMART_SESSION_ID"
 ENV_STOP = "PLAYSMART_STOP_FILE"
 ENV_DATA = "PLAYSMART_DATA_DIR"
+ENV_GAME = "PLAYSMART_GAME"
 
 REPO = Path(__file__).resolve().parent.parent
 ENV_FILE = REPO / ".env"
@@ -101,6 +102,18 @@ def session_id() -> str:
 
 def data_dir() -> Path:
     return Path(os.environ.get(ENV_DATA, "data"))
+
+
+def game() -> str:
+    """Which game this rig captures: ``league`` (default) or anything else.
+
+    ``league`` brackets the capture on League's local API and records game state.
+    Any other value (``valorant``, ``cs2``) is the manual bracket the rig had before
+    iteration 5 - F7 starts, F12 stops - with every other iteration-5 change kept
+    (session id, graceful stop, OBS anchor, pre-flight, upload modes). Added so the
+    branch can merge into ``Dev`` without breaking the Valorant rigs.
+    """
+    return (os.environ.get(ENV_GAME, "league").strip().lower() or "league")
 
 
 def stream_dir(stream: str) -> Path:

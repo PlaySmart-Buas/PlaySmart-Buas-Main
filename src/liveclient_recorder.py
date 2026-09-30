@@ -313,6 +313,7 @@ def meta_dict(sid: str, data: dict, started_ms: int) -> dict:
     return {
         "session_id": sid,
         "started_unix_ms": started_ms,
+        "game": "league",
         "started_iso": datetime.fromtimestamp(started_ms / 1000, timezone.utc).isoformat(),
         "riot_id": me.get("riotId") or me.get("summonerName") or active_name(data),
         "champion": me.get("championName", ""),
